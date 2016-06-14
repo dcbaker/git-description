@@ -1,0 +1,153 @@
+#!/usr/bin/python3
+# encoding=utf-8
+#
+# Copyright © 2016 Dylan Baker
+#
+# This program is free software: you can redistribute it and/or modify
+# it under the terms of the GNU General Public License as published by
+# the Free Software Foundation, either version 3 of the License, or
+# (at your option) any later version.
+#
+# This program is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+# GNU General Public License for more details.
+#
+# You should have received a copy of the GNU General Public License
+# along with this program.  If not, see <http://www.gnu.org/licenses/>.
+
+"""Utility for writing and maintaining descriptions of git branches."""
+
+import argparse
+import functools
+import os
+import subprocess
+import sys
+import tempfile
+
+import pygit2
+
+_DESCRIPTION = \
+    "git-desc is a tool for creating and manage descriptions of git branches."
+
+_REPO = pygit2.Repository(pygit2.discover_repository(os.getcwd()))  # pylint: disable=no-member
+
+
+def _get_description(branch):
+    """Get the description of the branch."""
+    desc = _REPO.config.get_multivar('branch.{}.description'.format(branch))
+    try:
+        return next(desc)[1:-1]  # Trim quotes from both sides
+    except StopIteration:
+        return None
+
+
+def show_cmd(args):
+    """Show the description of the branch or an empty string if there is none.
+    """
+    desc = _get_description(args.branch)
+    if desc:
+        print(desc, end='')
+
+    return 0
+
+
+def delete_cmd(args):
+    """Delete the description if it exists.
+
+    Currently there is not way using pygit2 to delete a config option, but what
+    we can do is set it to an empty string
+    """
+    # Don't set it to '' if it doesn't exist already.
+    if _get_description(args.branch):
+        _REPO.config.set_multivar('branch.{}.description'.format(args.branch),
+                                  r'.*', '')
+
+    return 0
+
+
+def edit_cmd(args, *, new=False):
+    """Edit the description.
+
+    Opens the description using the EDITOR value as a temporary file, then when
+    the file is closed it replaces the value with that value.
+    """
+    desc = _get_description(args.branch) if not new else None
+
+    f = tempfile.NamedTemporaryFile(delete=False, mode='w')
+    if desc:
+        f.write(desc)
+    f.close()
+
+    subprocess.check_call([args.editor, f.name])
+
+    with open(f.name, 'r') as nf:
+        desc = nf.read()
+    os.unlink(f.name)
+
+    _REPO.config.set_multivar(
+        'branch.{}.description'.format(args.branch),
+        r'.*',
+        repr(desc))
+
+    return 0
+
+
+def main():
+    """Parse arguments and dispatch to per-command function."""
+    parser = argparse.ArgumentParser(description=_DESCRIPTION)
+    parser.add_argument(
+        '-b', '--branch',
+        action='store',
+        default=_REPO.head.shorthand,
+        help='The git branch to edit. Defaults to current branch')
+    parser.add_argument(
+        '-e', '--editor',
+        action='store',
+        default=os.path.expandvars('$EDITOR'),
+        help='The editor to use. Defaults to $EDITOR')
+
+    # Top level subcommands.
+    #
+    # edit   -- modify the description
+    # delete -- delete the description
+    # new    -- create a new description
+    # show   -- show the description
+    commands = parser.add_subparsers()
+
+    edit = commands.add_parser(
+        'edit',
+        add_help=False,
+        help='edit the existing description or create a new one')
+    edit.set_defaults(func=functools.partial(edit_cmd, new=False))
+
+    new = commands.add_parser(
+        'new',
+        add_help=False,
+        help='Create a new description. Deletes an existing description')
+    new.set_defaults(func=functools.partial(edit_cmd, new=True))
+
+    show = commands.add_parser(
+        'show',
+        help='Show the current description')
+    show.set_defaults(func=show_cmd)
+
+    delete = commands.add_parser(
+        'delete',
+        add_help=False,
+        help='delete the description')
+    delete.set_defaults(func=delete_cmd)
+
+    args = parser.parse_args()
+    try:
+        sys.exit(args.func(args))
+    except AttributeError:
+        print(parser.format_help())
+        sys.exit(1)
+
+
+if __name__ == '__main__':
+    main()
+
+
+# vim: filetype=python
