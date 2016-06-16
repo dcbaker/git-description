@@ -37,7 +37,7 @@ def _get_description(branch):
     """Get the description of the branch."""
     desc = _REPO.config.get_multivar('branch.{}.description'.format(branch))
     try:
-        return next(desc)[1:-1]  # Trim quotes from both sides
+        return next(desc)
     except StopIteration:
         return None
 
